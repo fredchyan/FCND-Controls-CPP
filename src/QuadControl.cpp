@@ -70,10 +70,15 @@ VehicleCommand QuadControl::GenerateMotorCommands(float collThrustCmd, V3F momen
 
   ////////////////////////////// BEGIN STUDENT CODE ///////////////////////////
 
-  cmd.desiredThrustsN[0] = mass * 9.81f / 4.f; // front left
-  cmd.desiredThrustsN[1] = mass * 9.81f / 4.f; // front right
-  cmd.desiredThrustsN[2] = mass * 9.81f / 4.f; // rear left
-  cmd.desiredThrustsN[3] = mass * 9.81f / 4.f; // rear right
+  float l = L / (2.f * sqrt(2.f));
+  float term_x = momentCmd.x / l; // tau_x / l
+  float term_y = momentCmd.y / l; // tau_y / l
+  float term_z = momentCmd.z / -kappa; // -tau_z / k
+  float term_t = collThrustCmd;
+  cmd.desiredThrustsN[0] = (term_t + term_x + term_y + term_z) / 4.f;
+  cmd.desiredThrustsN[1] = (term_t - term_x + term_y - term_z) / 4.f;
+  cmd.desiredThrustsN[2] = (term_t + term_x - term_y - term_z) / 4.f;
+  cmd.desiredThrustsN[3] = (term_t - term_x - term_y + term_z) / 4.f;
 
   /////////////////////////////// END STUDENT CODE ////////////////////////////
 
@@ -97,9 +102,13 @@ V3F QuadControl::BodyRateControl(V3F pqrCmd, V3F pqr)
   V3F momentCmd;
 
   ////////////////////////////// BEGIN STUDENT CODE ///////////////////////////
-
   
-
+  V3F pqrErr = pqrCmd - pqr;
+  V3F uPqrBar = kpPQR * pqrErr;
+  momentCmd.x = Ixx * uPqrBar.x;
+  momentCmd.y = Iyy * uPqrBar.y;
+  momentCmd.z = Izz * uPqrBar.z;
+  
   /////////////////////////////// END STUDENT CODE ////////////////////////////
 
   return momentCmd;
@@ -128,8 +137,24 @@ V3F QuadControl::RollPitchControl(V3F accelCmd, Quaternion<float> attitude, floa
   Mat3x3F R = attitude.RotationMatrix_IwrtB();
 
   ////////////////////////////// BEGIN STUDENT CODE ///////////////////////////
+  
+  float c = -collThrustCmd / mass;
 
-
+  // b_x_c, b_y_c
+  V3F b_c(accelCmd.x / c, accelCmd.y / c, 0);
+  b_c.constrain(-maxTiltAngle, maxTiltAngle);
+  // b_x, b_y
+  V3F b(R(0,2), R(1,2), 0);
+  V3F b_err = b_c - b;
+  V3F b_commanded_dot = kpBank * b_err;
+  float R21 = R(1,0);
+  float R11 = R(0,0);
+  float R22 = R(1,1);
+  float R12 = R(0,1);
+  float R33 = R(2,2);
+  // commanded angular velocities
+  pqrCmd.x = (R21 * b_commanded_dot.x - R11 * b_commanded_dot.y) / R33;
+  pqrCmd.y = (R22 * b_commanded_dot.x - R12 * b_commanded_dot.y) / R33;
 
   /////////////////////////////// END STUDENT CODE ////////////////////////////
 
@@ -161,7 +186,12 @@ float QuadControl::AltitudeControl(float posZCmd, float velZCmd, float posZ, flo
 
   ////////////////////////////// BEGIN STUDENT CODE ///////////////////////////
 
-
+  integratedAltitudeError += (posZCmd - posZ)*dt;
+  velZCmd = kpPosZ * (posZCmd - posZ) + velZCmd;
+  velZCmd = CONSTRAIN(velZCmd, -maxAscentRate, maxDescentRate);
+  accelZCmd= accelZCmd + KiPosZ * integratedAltitudeError + kpVelZ * (velZCmd - velZ);
+  float b_z = R(2,2);
+  thrust = -mass * (accelZCmd - CONST_GRAVITY) / b_z;
 
   /////////////////////////////// END STUDENT CODE ////////////////////////////
   
@@ -194,7 +224,16 @@ V3F QuadControl::LateralPositionControl(V3F posCmd, V3F velCmd, V3F pos, V3F vel
 
   ////////////////////////////// BEGIN STUDENT CODE ///////////////////////////
 
-  
+  velCmd = kpPosXY * (posCmd - pos) + velCmd;
+  float velCmdNorm = velCmd.magXY();
+  if (velCmdNorm > maxSpeedXY) {
+    velCmd = velCmd * maxSpeedXY / velCmdNorm;
+  }
+  accelCmd  = accelCmd + kpVelXY * (velCmd - vel);
+  float accelCmdNorm = accelCmd.magXY();
+  if (accelCmdNorm > maxAccelXY) {
+    accelCmd = accelCmd * maxAccelXY / accelCmdNorm;
+  }
 
   /////////////////////////////// END STUDENT CODE ////////////////////////////
 
@@ -216,7 +255,15 @@ float QuadControl::YawControl(float yawCmd, float yaw)
 
   float yawRateCmd=0;
   ////////////////////////////// BEGIN STUDENT CODE ///////////////////////////
-
+  
+  yawCmd = fmod(yawCmd, 2.f*F_PI);
+  float yawError = yawCmd - yaw;
+  if (yawError > F_PI) {
+    yawError = yawError - 2.f*F_PI;
+  }else if (yawError < -F_PI) {
+    yawError = yawError + 2.f*F_PI;
+  }
+  yawRateCmd = kpYaw * yawError;
 
   /////////////////////////////// END STUDENT CODE ////////////////////////////
 
